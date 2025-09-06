@@ -1,0 +1,171 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build
+        run: go build -o node-modules-remover .
+
+      - name: Test binary
+        run: |
+          ./node-modules-remover -version
+          ./node-modules-remover -help
+
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    needs: test
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ""
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            ext: ""
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+            ext: ".exe"
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            ext: ""
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: ""
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o node-modules-remover${{ matrix.ext }} .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: node-modules-remover-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: node-modules-remover${{ matrix.ext }}
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for artifact in node-modules-remover-*; do
+            if [ -d "$artifact" ]; then
+              cp "$artifact"/* release/
+            fi
+          done
+
+          # Create checksums
+          cd release
+          for file in *; do
+            sha256sum "$file" > "$file.sha256"
+          done
+
+          # Create zip file
+          zip -r node-modules-remover-${{ github.ref_name }}.zip *
+          ls -la
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          body: |
+            ## Changes
+            - Automated release from ${{ github.ref_name }}
+
+            ## Downloads
+            Choose the appropriate binary for your operating system and architecture:
+
+            ### Linux
+            - `node-modules-remover-linux-amd64` - Linux x86_64
+            - `node-modules-remover-linux-arm64` - Linux ARM64
+
+            ### macOS
+            - `node-modules-remover-darwin-amd64` - macOS Intel
+            - `node-modules-remover-darwin-arm64` - macOS Apple Silicon
+
+            ### Windows
+            - `node-modules-remover-windows-amd64.exe` - Windows x86_64
+            - `node-modules-remover-windows-arm64.exe` - Windows ARM64
+
+            ## Installation
+            1. Download the appropriate binary for your system
+            2. Make it executable (Unix systems): `chmod +x node-modules-remover`
+            3. Move to your PATH or use directly
+
+            ## Verification
+            Verify the integrity of your download using the provided SHA256 checksums:
+            ```bash
+            sha256sum -c node-modules-remover-<platform>-<arch>.sha256
+            ```
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./release/node-modules-remover-${{ github.ref_name }}.zip
+          asset_name: node-modules-remover-${{ github.ref_name }}.zip
+          asset_content_type: application/zip
