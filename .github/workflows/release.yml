@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   packages: write
+  actions: read
 
 jobs:
   test:
@@ -105,6 +106,11 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
+      - name: Setup GitHub CLI
+        run: |
+          gh --version
+          echo "GitHub CLI is available"
+
       - name: Prepare release assets
         run: |
           mkdir -p release
@@ -122,44 +128,46 @@ jobs:
           ls -la
 
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
-          body: |
-            ## Changes
+        run: |
+          # Check if release already exists
+          if gh release view ${{ github.ref_name }} >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists, skipping creation"
+          else
+            echo "Creating release ${{ github.ref_name }}"
+            gh release create ${{ github.ref_name }} \
+              --title "Release ${{ github.ref_name }}" \
+              --notes "## Changes
             - Automated release from ${{ github.ref_name }}
 
             ## Downloads
             Choose the appropriate binary for your operating system and architecture:
 
             ### Linux
-            - `node-modules-remover-linux-amd64` - Linux x86_64
-            - `node-modules-remover-linux-arm64` - Linux ARM64
+            - \`node-modules-remover-linux-amd64\` - Linux x86_64
+            - \`node-modules-remover-linux-arm64\` - Linux ARM64
 
             ### macOS
-            - `node-modules-remover-darwin-amd64` - macOS Intel
-            - `node-modules-remover-darwin-arm64` - macOS Apple Silicon
+            - \`node-modules-remover-darwin-amd64\` - macOS Intel
+            - \`node-modules-remover-darwin-arm64\` - macOS Apple Silicon
 
             ### Windows
-            - `node-modules-remover-windows-amd64.exe` - Windows x86_64
-            - `node-modules-remover-windows-arm64.exe` - Windows ARM64
+            - \`node-modules-remover-windows-amd64.exe\` - Windows x86_64
+            - \`node-modules-remover-windows-arm64.exe\` - Windows ARM64
 
             ## Installation
             1. Download the appropriate binary for your system
-            2. Make it executable (Unix systems): `chmod +x node-modules-remover`
+            2. Make it executable (Unix systems): \`chmod +x node-modules-remover\`
             3. Move to your PATH or use directly
 
             ## Verification
             Verify the integrity of your download using the provided SHA256 checksums:
-            ```bash
+            \`\`\`bash
             sha256sum -c node-modules-remover-<platform>-<arch>.sha256
-            ```
+            \`\`\`" \
+              ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') && '--prerelease' || '' }}
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Assets
         run: |
